@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.5
+- `-azulfixnoef`: normal framing instead of the enhanced framing that Azul enables whatever the panel declares (test for a striped picture after display sleep)
+
 #### v1.1.4
 - Wait up to 1 s for the panel power sequencer, as libgfxinit (power cycle delay included), and take the controller in `LightUpDP` and `DisableDisplay` too, for `-azulfixnoasr`
 

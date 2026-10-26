@@ -66,6 +66,7 @@ next probe. Registers go through `AppleIntelAzulController::ReadRegister32`/`Wri
 | `-azulfixnoasr` | skip the ASR fix |
 | `-azulfixnome` | skip the ME wait patch |
 | `-azulfixnopanel` | skip the panel backlight handling |
+| `-azulfixnoef` | normal framing on the DP link instead of enhanced framing, which Azul enables whatever the panel declares (DPCD 0x002 bit 7) |
 | `-azulfixdbg` | debug log (DEBUG build) |
 | `-azulfixbeta` | load on macOS versions newer than supported |
 

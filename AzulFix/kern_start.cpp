@@ -30,6 +30,9 @@
 //       power, so that HPD stays high for the next probe. Nothing is done if the sequencer is
 //       already in the requested state.
 //
+//  EF   Optional, -azulfixnoef: normal framing instead of the enhanced framing that Azul always
+//       enables and the W541 panel does not declare.
+//
 
 #include <Headers/plugin_start.hpp>
 #include <Headers/kern_api.hpp>
@@ -73,6 +76,14 @@ static const uint8_t meWaitRepl[] {
 
 static_assert(sizeof(meWaitFind) == sizeof(meWaitRepl), "find and replace differ in size");
 
+// Enhanced framing (18.0.8): start() sets the flag at controller+0x1a5d (next to ASRDisable) to 1
+// whatever the sink declares, and LinkTraining and FastLinkTraining read it; the W541 panel does not declare it (DPCD
+// 0x002 bit 7 = 0). With -azulfixnoef the three reads give 0: normal framing, as i915 uses there.
+static const uint8_t efLinkFind[] {0x41, 0x8A, 0x8F, 0x5D, 0x1A, 0x00, 0x00};        // mov cl, [r15+0x1a5d] (x2)
+static const uint8_t efLinkRepl[] {0x31, 0xC9, 0x0F, 0x1F, 0x44, 0x00, 0x00};        // xor ecx, ecx; nop
+static const uint8_t efFastFind[] {0x41, 0x0F, 0xB6, 0x9F, 0x5D, 0x1A, 0x00, 0x00};  // movzx ebx, byte [r15+0x1a5d]
+static const uint8_t efFastRepl[] {0x31, 0xDB, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};  // xor ebx, ebx; nop
+
 static mach_vm_address_t orgGetFeatureControl {};
 static bool asrInjected {false};
 
@@ -103,6 +114,7 @@ static void *panelController {};
 static const char *asrStatus {"Azul not loaded"};
 static const char *meStatus {"Azul not loaded"};
 static const char *panelStatus {"Azul not loaded"};
+static const char *efStatus {"Azul not loaded"};
 
 static void publishStatus() {
 	auto self = ADDPR(selfInstance);
@@ -110,6 +122,7 @@ static void publishStatus() {
 		self->setProperty("ASRDisable", asrStatus);
 		self->setProperty("MEWait", meStatus);
 		self->setProperty("Panel", panelStatus);
+		self->setProperty("EnhancedFraming", efStatus);
 	}
 }
 
@@ -280,7 +293,24 @@ static void processAzul(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 
 	processPanel(patcher, index, address, size);
 
-	SYSLOG("azul", "getFeatureControl: %s, findMEDevice wait: %s, panel: %s", asrStatus, meStatus, panelStatus);
+	if (!checkKernelArgument("-azulfixnoef")) {
+		efStatus = "as Azul sets it (on)";
+	} else {
+		KernelPatcher::LookupPatch patches[] {
+			{&kextAzul, efLinkFind, efLinkRepl, sizeof(efLinkFind), 2},
+			{&kextAzul, efFastFind, efFastRepl, sizeof(efFastFind), 1},
+		};
+		efStatus = "off (-azulfixnoef)";
+		for (auto &patch : patches) {
+			patcher.clearError();
+			patcher.applyLookupPatch(&patch);
+			if (patcher.getError() != KernelPatcher::Error::NoError)
+				efStatus = "bytes not found, left on";
+		}
+		patcher.clearError();
+	}
+
+	SYSLOG("azul", "getFeatureControl: %s, findMEDevice wait: %s, panel: %s, enhanced framing: %s", asrStatus, meStatus, panelStatus, efStatus);
 	publishStatus();
 }
 

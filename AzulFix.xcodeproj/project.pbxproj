@@ -320,7 +320,7 @@
 				MODULE_NAME = com.github.debianita22.AzulFix;
 				MODULE_START = "$(PRODUCT_NAME)_kern_start";
 				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
-				MODULE_VERSION = 1.1.4;
+				MODULE_VERSION = 1.1.5;
 				OTHER_CFLAGS = (
 					"-mmmx",
 					"-msse",
@@ -368,7 +368,7 @@
 				MODULE_NAME = com.github.debianita22.AzulFix;
 				MODULE_START = "$(PRODUCT_NAME)_kern_start";
 				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
-				MODULE_VERSION = 1.1.4;
+				MODULE_VERSION = 1.1.5;
 				OTHER_CFLAGS = (
 					"-mmmx",
 					"-msse",
