@@ -23,9 +23,10 @@
 //       leaving the display to the OS at S3 resume (VDD only, PP_CONTROL 0x8) the link trains and
 //       the picture is sent, but the backlight stays off. On the panel framebuffer (port-number 7,
 //       DDI D), after LightUpDP the panel power sequence is turned on and then the backlight, as
-//       libgfxinit and i915 do; before DisableDisplay the backlight is turned off. The panel keeps
-//       its power, so that HPD stays high for the next probe. Nothing is done if the sequencer is
-//       already in the requested state.
+//       libgfxinit and i915 do; before DisableDisplay the backlight is turned off, with the
+//       backlight off delay of the panel before the video goes. The panel keeps its power, so
+//       that HPD stays high for the next probe. Nothing is done if the sequencer is already in
+//       the requested state.
 //
 
 #include <Headers/plugin_start.hpp>
@@ -77,6 +78,7 @@ static bool asrInjected {false};
 static constexpr uint32_t PanelPort {7};
 static constexpr unsigned long PCH_PP_STATUS {0xC7200};
 static constexpr unsigned long PCH_PP_CONTROL {0xC7204};
+static constexpr unsigned long PCH_PP_OFF_DELAYS {0xC720C};
 static constexpr uint32_t PP_ON {1U << 31};
 static constexpr uint32_t PP_SEQUENCE_MASK {3U << 28};
 static constexpr uint32_t PANEL_POWER_ON {1U << 0};
@@ -159,11 +161,15 @@ static void panelOn(void *controller) {
 	}
 }
 
+// Backlight_Off, then the backlight off to video off delay (PP_OFF_DELAYS 12:0, 100 us units)
 static void backlightOff(void *controller) {
 	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
 	if (control != 0xFFFFFFFF && (control & EDP_BLC_ENABLE)) {
 		orgWriteRegister32(controller, PCH_PP_CONTROL, control & ~EDP_BLC_ENABLE);
-		DBGLOG("azul", "backlight off, PP_CONTROL %08X", control & ~EDP_BLC_ENABLE);
+		auto delay = (orgReadRegister32(controller, PCH_PP_OFF_DELAYS) & 0x1FFF) * 100;
+		if (delay)
+			IOSleep((delay + 999) / 1000);
+		DBGLOG("azul", "backlight off, PP_CONTROL %08X, waited %u us", control & ~EDP_BLC_ENABLE, delay);
 	}
 }
 
@@ -193,6 +199,7 @@ static void processPanel(KernelPatcher &patcher, size_t index, mach_vm_address_t
 	patcher.clearError();
 	if (!orgReadRegister32 || !orgWriteRegister32) {
 		panelStatus = "register accessors not found";
+		SYSLOG("azul", "ReadRegister32/WriteRegister32 not found, panel backlight not handled");
 		return;
 	}
 

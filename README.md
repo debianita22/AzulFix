@@ -14,7 +14,7 @@ OCLP installs it, so nothing has to be patched again after a macOS update or an 
 |-----|-----------------|--------------|
 | ASR | white flashes every ~1 s, no picture with acceleration | `FeatureControl` > `ASRDisable` = 1 |
 | ME wait | 40 s of boot spent waiting for the ME, slow wake with a green screen | wait of 1 ms instead of 10 s per device name |
-| Panel | black screen at S3 wake when the firmware leaves the display to the OS; backlight left on during display sleep | panel power sequence and backlight on after `LightUpDP`, backlight off before `DisableDisplay` |
+| Panel | black screen at S3 wake when the firmware leaves the display to the OS; backlight left on during display sleep | panel power sequence and backlight on after `LightUpDP`, backlight off before `DisableDisplay` (with the backlight off delay) |
 
 Tested build: `AppleIntelFramebufferAzul` 18.0.8 (OCLP, UUID `FA074475…`), macOS 14 Sonoma.
 
@@ -42,7 +42,8 @@ resume with ouroBIOS "Light the display up at wake" off, the firmware gives the 
 (`PP_CONTROL` 0x8): Azul trains the link and sends the picture, but the backlight stays off. On the
 framebuffer with `port-number` 7, AzulFix turns the power sequence on after `LightUpDP`, waits for it
 (power-up delay, at most 500 ms) and turns the backlight on, as libgfxinit and i915 do; before
-`DisableDisplay` it turns the backlight off. The panel keeps its power, so its HPD stays high for the
+`DisableDisplay` it turns the backlight off and waits the backlight off delay (`PP_OFF_DELAYS`, 1 ms
+on the W541) before the video goes. The panel keeps its power, so its HPD stays high for the
 next probe. Registers go through `AppleIntelAzulController::ReadRegister32`/`WriteRegister32`.
 
 ## Install
