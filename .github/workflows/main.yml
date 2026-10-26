@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+env:
+  LILU_VERSION: 1.7.2
+  LILU_SHA256: e95df95d82e8b151047abf359ecd9c853755c59293e19dfcc3907da8fbd8cf89
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 3f750085caa17ec3a7880f11c11bf4f48cd6a164
+          path: MacKernelSDK
+      - name: Lilu SDK
+        run: |
+          zip="Lilu-${LILU_VERSION}-DEBUG.zip"
+          curl -LfsO "https://github.com/acidanthera/Lilu/releases/download/${LILU_VERSION}/${zip}"
+          echo "${LILU_SHA256}  ${zip}" | shasum -a 256 -c
+          unzip -q "${zip}" 'Lilu.kext/*'
+          rm "${zip}"
+      - run: xcodebuild -version
+      - run: xcodebuild -jobs 1 -configuration Debug
+      - run: xcodebuild -jobs 1 -configuration Release
+      - name: Check
+        run: |
+          bin=build/Release/AzulFix.kext/Contents/MacOS/AzulFix
+          plutil -p build/Release/AzulFix.kext/Contents/Info.plist
+          otool -hv "$bin"
+          otool -l "$bin" | awk '$1 == "cmd" {print $2}' | sort | uniq -c
+          ! otool -l "$bin" | grep -q LC_DYLD_CHAINED_FIXUPS
+          nm -um "$bin"
+          shasum -a 256 build/*/*.zip
+      - name: Upload to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AzulFix
+          path: build/*/*.zip
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: build/*/*.zip
+          tag: ${{ github.ref }}
+          file_glob: true

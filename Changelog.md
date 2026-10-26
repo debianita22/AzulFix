@@ -1,0 +1,4 @@
+AzulFix Changelog
+=================
+#### v1.0.0
+- Initial release: `ASRDisable` = 1 in the `FeatureControl` read by `AppleIntelAzulController::getFeatureControl`, `findMEDevice` wait 10 s -> 1 ms
