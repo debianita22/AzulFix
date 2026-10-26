@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.6
+- Normal framing by default (`-azulfixef` keeps enhanced framing): with it the picture always came back clean after display sleep, 10 times out of 10
+
 #### v1.1.5
 - `-azulfixnoef`: normal framing instead of the enhanced framing that Azul enables whatever the panel declares (test for a striped picture after display sleep)
 
