@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.2
+- Turn the panel power sequence on before `LightUpDP` trains the link, the backlight after it: powering the panel up after training broke the link (striped picture at S3 wake)
+
 #### v1.1.1
 - Wait the backlight off delay of the panel (`PP_OFF_DELAYS`) between the backlight off and `DisableDisplay`
 

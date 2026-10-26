@@ -22,11 +22,12 @@
 //       (PP_CONTROL), which coreboot uses for it (GFX_GMA_PANEL_1_PORT "DP3"): with the firmware
 //       leaving the display to the OS at S3 resume (VDD only, PP_CONTROL 0x8) the link trains and
 //       the picture is sent, but the backlight stays off. On the panel framebuffer (port-number 7,
-//       DDI D), after LightUpDP the panel power sequence is turned on and then the backlight, as
-//       libgfxinit and i915 do; before DisableDisplay the backlight is turned off, with the
-//       backlight off delay of the panel before the video goes. The panel keeps its power, so
-//       that HPD stays high for the next probe. Nothing is done if the sequencer is already in
-//       the requested state.
+//       DDI D), the panel power sequence is turned on before LightUpDP trains the link (powering
+//       the panel up after training broke the link: striped picture at wake) and the backlight
+//       after it, as libgfxinit and i915 do; before DisableDisplay the backlight is turned off,
+//       with the backlight off delay of the panel before the video goes. The panel keeps its
+//       power, so that HPD stays high for the next probe. Nothing is done if the sequencer is
+//       already in the requested state.
 //
 
 #include <Headers/plugin_start.hpp>
@@ -139,23 +140,26 @@ static bool isPanel(IOService *framebuffer) {
 	return port && port->unsigned32BitValue() == PanelPort;
 }
 
-// Panel.On, then Backlight_On (libgfxinit): wait for the sequencer before the backlight
-static void panelOn(void *controller) {
+// Panel.On (libgfxinit): before the link is trained, as the panel can drop the link when the
+// sequencer powers it up; wait for the sequencer
+static void panelPowerOn(void *controller) {
 	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
-	if (control == 0xFFFFFFFF)
+	if (control == 0xFFFFFFFF || (control & PANEL_POWER_ON))
 		return;
-	if (!(control & PANEL_POWER_ON)) {
-		orgWriteRegister32(controller, PCH_PP_CONTROL, control | PANEL_POWER_ON | PANEL_POWER_RESET);
-		// Power-up delay of the panel, 200 ms on the W541; give up after 500 ms
-		for (int i = 0; i < 50; i++) {
-			if ((orgReadRegister32(controller, PCH_PP_STATUS) & (PP_ON | PP_SEQUENCE_MASK)) == PP_ON)
-				break;
-			IOSleep(10);
-		}
-		control = orgReadRegister32(controller, PCH_PP_CONTROL);
-		DBGLOG("azul", "panel power on, PP_STATUS %08X", orgReadRegister32(controller, PCH_PP_STATUS));
+	orgWriteRegister32(controller, PCH_PP_CONTROL, control | PANEL_POWER_ON | PANEL_POWER_RESET);
+	// Power-up delay of the panel, 200 ms on the W541; give up after 500 ms
+	for (int i = 0; i < 50; i++) {
+		if ((orgReadRegister32(controller, PCH_PP_STATUS) & (PP_ON | PP_SEQUENCE_MASK)) == PP_ON)
+			break;
+		IOSleep(10);
 	}
-	if (!(control & EDP_BLC_ENABLE)) {
+	DBGLOG("azul", "panel power on, PP_STATUS %08X", orgReadRegister32(controller, PCH_PP_STATUS));
+}
+
+// Backlight_On (libgfxinit): once the link carries the picture
+static void backlightOn(void *controller) {
+	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
+	if (control != 0xFFFFFFFF && !(control & EDP_BLC_ENABLE)) {
 		orgWriteRegister32(controller, PCH_PP_CONTROL, control | EDP_BLC_ENABLE);
 		DBGLOG("azul", "backlight on, PP_CONTROL %08X", control | EDP_BLC_ENABLE);
 	}
@@ -175,9 +179,12 @@ static void backlightOff(void *controller) {
 
 // Return values are passed through whole: only the panel framebuffer is touched
 static uint64_t wrapLightUpDP(void *controller, IOService *framebuffer, void *path, const void *timing) {
+	bool panel = isPanel(framebuffer);
+	if (panel)
+		panelPowerOn(controller);
 	auto ret = FunctionCast(wrapLightUpDP, orgLightUpDP)(controller, framebuffer, path, timing);
-	if (isPanel(framebuffer))
-		panelOn(controller);
+	if (panel)
+		backlightOn(controller);
 	return ret;
 }
 
