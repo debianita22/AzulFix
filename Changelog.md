@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.3
+- Turn the panel power sequence on when the panel framebuffer wakes (`doSetPowerState`), before Azul wakes the sink over AUX: powering it up just before `LightUpDP` left the picture black at S3 wake
+
 #### v1.1.2
 - Turn the panel power sequence on before `LightUpDP` trains the link, the backlight after it: powering the panel up after training broke the link (striped picture at S3 wake)
 

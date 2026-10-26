@@ -14,7 +14,7 @@ OCLP installs it, so nothing has to be patched again after a macOS update or an 
 |-----|-----------------|--------------|
 | ASR | white flashes every ~1 s, no picture with acceleration | `FeatureControl` > `ASRDisable` = 1 |
 | ME wait | 40 s of boot spent waiting for the ME, slow wake with a green screen | wait of 1 ms instead of 10 s per device name |
-| Panel | black screen at S3 wake when the firmware leaves the display to the OS; backlight left on during display sleep | panel power sequence on before `LightUpDP`, backlight on after it, backlight off before `DisableDisplay` (with the backlight off delay) |
+| Panel | black screen at S3 wake when the firmware leaves the display to the OS; backlight left on during display sleep | panel power sequence on when the framebuffer wakes, backlight on after `LightUpDP`, backlight off before `DisableDisplay` (with the backlight off delay) |
 
 Tested build: `AppleIntelFramebufferAzul` 18.0.8 (OCLP, UUID `FA074475…`), macOS 14 Sonoma.
 
@@ -40,7 +40,8 @@ A device that is already registered is still found.
 power sequencer (`PP_CONTROL`), which coreboot uses for it (`GFX_GMA_PANEL_1_PORT "DP3"`). At S3
 resume with ouroBIOS "Light the display up at wake" off, the firmware gives the panel only VDD
 (`PP_CONTROL` 0x8): Azul trains the link and sends the picture, but the backlight stays off. On the
-framebuffer with `port-number` 7, AzulFix turns the power sequence on before `LightUpDP` trains the link,
+framebuffer with `port-number` 7, AzulFix turns the power sequence on when the framebuffer wakes
+(`AppleIntelFramebuffer::doSetPowerState`), before Azul wakes the sink over AUX and trains the link,
 waits for it (power-up delay, at most 500 ms), and turns the backlight on after it, as libgfxinit
 and i915 do; before
 `DisableDisplay` it turns the backlight off and waits the backlight off delay (`PP_OFF_DELAYS`, 1 ms
@@ -76,7 +77,7 @@ ioreg -rc AppleIntelAzulController -d1 -w0 | grep -o '"ASRDisable"=[0-9]*'
 sudo dmesg | grep AzulFix
 ```
 
-Expected: `ASRDisable` = `set to 1`, `MEWait` = `10 s -> 1 ms`, `Panel` = `backlight with LightUpDP and DisableDisplay`, and `"ASRDisable"=1` in the
+Expected: `ASRDisable` = `set to 1`, `MEWait` = `10 s -> 1 ms`, `Panel` = `power with doSetPowerState, backlight with LightUpDP and DisableDisplay`, and `"ASRDisable"=1` in the
 controller's `FeatureControl`. Lilu logs through `IOLog("%s", ...)`, which the unified log stores
 as `<private>`, so `log show` does not show the messages; the kernel message buffer (`dmesg`) does,
 while they are still in it.

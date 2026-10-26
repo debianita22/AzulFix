@@ -22,9 +22,10 @@
 //       (PP_CONTROL), which coreboot uses for it (GFX_GMA_PANEL_1_PORT "DP3"): with the firmware
 //       leaving the display to the OS at S3 resume (VDD only, PP_CONTROL 0x8) the link trains and
 //       the picture is sent, but the backlight stays off. On the panel framebuffer (port-number 7,
-//       DDI D), the panel power sequence is turned on before LightUpDP trains the link (powering
-//       the panel up after training broke the link: striped picture at wake) and the backlight
-//       after it, as libgfxinit and i915 do; before DisableDisplay the backlight is turned off,
+//       DDI D), the panel power sequence is turned on when the framebuffer wakes
+//       (doSetPowerState), before Azul wakes the sink over AUX and trains the link: powering the
+//       panel up later resets it (striped or black picture at wake). The backlight goes on after
+//       LightUpDP, as libgfxinit and i915 do; before DisableDisplay the backlight is turned off,
 //       with the backlight off delay of the panel before the video goes. The panel keeps its
 //       power, so that HPD stays high for the next probe. Nothing is done if the sequencer is
 //       already in the requested state.
@@ -93,6 +94,9 @@ static t_readRegister32 orgReadRegister32 {};
 static t_writeRegister32 orgWriteRegister32 {};
 static mach_vm_address_t orgLightUpDP {};
 static mach_vm_address_t orgDisableDisplay {};
+static mach_vm_address_t orgDoSetPowerState {};
+// The controller, for the framebuffer hook: Azul has one, and calls getFeatureControl in its start
+static void *panelController {};
 
 // Shown by `ioreg -rc AzulFix -d1`
 static const char *asrStatus {"Azul not loaded"};
@@ -109,6 +113,7 @@ static void publishStatus() {
 }
 
 static void wrapGetFeatureControl(IOService *controller) {
+	panelController = controller;
 	auto features = OSDynamicCast(OSDictionary, controller->getProperty("FeatureControl"));
 	auto current = features ? OSDynamicCast(OSNumber, features->getObject("ASRDisable")) : nullptr;
 	if (!features) {
@@ -140,8 +145,9 @@ static bool isPanel(IOService *framebuffer) {
 	return port && port->unsigned32BitValue() == PanelPort;
 }
 
-// Panel.On (libgfxinit): before the link is trained, as the panel can drop the link when the
-// sequencer powers it up; wait for the sequencer
+// Panel.On (libgfxinit): before Azul talks to the panel at all, as the panel loses its state when
+// the sequencer powers it up (the link at 1.1.1, the sink power state written over AUX at
+// 1.1.2: striped or black picture at wake); wait for the sequencer
 static void panelPowerOn(void *controller) {
 	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
 	if (control == 0xFFFFFFFF || (control & PANEL_POWER_ON))
@@ -194,6 +200,15 @@ static uint64_t wrapDisableDisplay(void *controller, IOService *framebuffer, voi
 	return FunctionCast(wrapDisableDisplay, orgDisableDisplay)(controller, framebuffer, path, arg);
 }
 
+// AppleIntelFramebuffer::doSetPowerState(unsigned int): state 2 is on. At wake the original wakes
+// the sink over AUX and then lights the display up: power the panel up before all of it. Not in a
+// dark wake, where the framebuffers stay off.
+static uint64_t wrapDoSetPowerState(IOService *framebuffer, uint32_t state) {
+	if (state == 2 && panelController && isPanel(framebuffer))
+		panelPowerOn(panelController);
+	return FunctionCast(wrapDoSetPowerState, orgDoSetPowerState)(framebuffer, state);
+}
+
 static void processPanel(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (checkKernelArgument("-azulfixnopanel")) {
 		panelStatus = "off (-azulfixnopanel)";
@@ -213,12 +228,13 @@ static void processPanel(KernelPatcher &patcher, size_t index, mach_vm_address_t
 	KernelPatcher::RouteRequest requests[] {
 		{"__ZN24AppleIntelAzulController9LightUpDPEP21AppleIntelFramebufferP11DISPLAYPATHPK29IODetailedTimingInformationV2", wrapLightUpDP, orgLightUpDP},
 		{"__ZN24AppleIntelAzulController14DisableDisplayEP21AppleIntelFramebufferP11DISPLAYPATHb", wrapDisableDisplay, orgDisableDisplay},
+		{"__ZN21AppleIntelFramebuffer15doSetPowerStateEj", wrapDoSetPowerState, orgDoSetPowerState},
 	};
 	if (patcher.routeMultiple(index, requests, arrsize(requests), address, size)) {
-		panelStatus = "backlight with LightUpDP and DisableDisplay";
+		panelStatus = "power with doSetPowerState, backlight with LightUpDP and DisableDisplay";
 	} else {
-		panelStatus = "LightUpDP/DisableDisplay not routed";
-		SYSLOG("azul", "failed to route LightUpDP/DisableDisplay, error %d", static_cast<int>(patcher.getError()));
+		panelStatus = "LightUpDP/DisableDisplay/doSetPowerState not routed";
+		SYSLOG("azul", "failed to route LightUpDP/DisableDisplay/doSetPowerState, error %d", static_cast<int>(patcher.getError()));
 	}
 	patcher.clearError();
 }
