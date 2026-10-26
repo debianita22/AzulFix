@@ -4,7 +4,7 @@
 //
 //  Lilu plugin for AppleIntelFramebufferAzul (Haswell) on firmware that drives the built-in
 //  panel through a DisplayPort port (fPortType 2, not eDP) and hides the ME (HECI) device,
-//  as ouroBIOS/coreboot does on the ThinkPad W541. Both fixes are applied in memory when the
+//  as ouroBIOS/coreboot does on the ThinkPad W541. The fixes are applied in memory when the
 //  framebuffer loads, so the kext on disk (restored by OCLP) stays untouched.
 //
 //  ASR  AppleIntelAzulController::getFeatureControl copies FeatureControl > ASRDisable from the
@@ -18,11 +18,21 @@
 //       pci8086,8c3a/9c3a/8cba/9cba: 40 s at boot and again for every framebuffer at wake (green
 //       screen until the gamma is restored). The wait becomes 1 ms.
 //
+//  Panel  To Azul the panel is a DP display, so it never drives the PCH panel power sequencer
+//       (PP_CONTROL), which coreboot uses for it (GFX_GMA_PANEL_1_PORT "DP3"): with the firmware
+//       leaving the display to the OS at S3 resume (VDD only, PP_CONTROL 0x8) the link trains and
+//       the picture is sent, but the backlight stays off. On the panel framebuffer (port-number 7,
+//       DDI D), after LightUpDP the panel power sequence is turned on and then the backlight, as
+//       libgfxinit and i915 do; before DisableDisplay the backlight is turned off. The panel keeps
+//       its power, so that HPD stays high for the next probe. Nothing is done if the sequencer is
+//       already in the requested state.
+//
 
 #include <Headers/plugin_start.hpp>
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_util.hpp>
 
+#include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
@@ -63,15 +73,35 @@ static_assert(sizeof(meWaitFind) == sizeof(meWaitRepl), "find and replace differ
 static mach_vm_address_t orgGetFeatureControl {};
 static bool asrInjected {false};
 
+// Panel: port-number of DDI D, and the PCH panel power sequencer (i915_reg.h)
+static constexpr uint32_t PanelPort {7};
+static constexpr unsigned long PCH_PP_STATUS {0xC7200};
+static constexpr unsigned long PCH_PP_CONTROL {0xC7204};
+static constexpr uint32_t PP_ON {1U << 31};
+static constexpr uint32_t PP_SEQUENCE_MASK {3U << 28};
+static constexpr uint32_t PANEL_POWER_ON {1U << 0};
+static constexpr uint32_t PANEL_POWER_RESET {1U << 1};
+static constexpr uint32_t EDP_BLC_ENABLE {1U << 2};
+
+// AppleIntelAzulController::ReadRegister32(unsigned long) and WriteRegister32(unsigned long, unsigned int)
+using t_readRegister32 = uint32_t (*)(void *, unsigned long);
+using t_writeRegister32 = void (*)(void *, unsigned long, uint32_t);
+static t_readRegister32 orgReadRegister32 {};
+static t_writeRegister32 orgWriteRegister32 {};
+static mach_vm_address_t orgLightUpDP {};
+static mach_vm_address_t orgDisableDisplay {};
+
 // Shown by `ioreg -rc AzulFix -d1`
 static const char *asrStatus {"Azul not loaded"};
 static const char *meStatus {"Azul not loaded"};
+static const char *panelStatus {"Azul not loaded"};
 
 static void publishStatus() {
 	auto self = ADDPR(selfInstance);
 	if (self) {
 		self->setProperty("ASRDisable", asrStatus);
 		self->setProperty("MEWait", meStatus);
+		self->setProperty("Panel", panelStatus);
 	}
 }
 
@@ -100,6 +130,83 @@ static void wrapGetFeatureControl(IOService *controller) {
 	SYSLOG("azul", "FeatureControl ASRDisable %s", asrStatus);
 	publishStatus();
 	FunctionCast(wrapGetFeatureControl, orgGetFeatureControl)(controller);
+}
+
+static bool isPanel(IOService *framebuffer) {
+	auto port = framebuffer ? OSDynamicCast(OSNumber, framebuffer->getProperty("port-number")) : nullptr;
+	return port && port->unsigned32BitValue() == PanelPort;
+}
+
+// Panel.On, then Backlight_On (libgfxinit): wait for the sequencer before the backlight
+static void panelOn(void *controller) {
+	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
+	if (control == 0xFFFFFFFF)
+		return;
+	if (!(control & PANEL_POWER_ON)) {
+		orgWriteRegister32(controller, PCH_PP_CONTROL, control | PANEL_POWER_ON | PANEL_POWER_RESET);
+		// Power-up delay of the panel, 200 ms on the W541; give up after 500 ms
+		for (int i = 0; i < 50; i++) {
+			if ((orgReadRegister32(controller, PCH_PP_STATUS) & (PP_ON | PP_SEQUENCE_MASK)) == PP_ON)
+				break;
+			IOSleep(10);
+		}
+		control = orgReadRegister32(controller, PCH_PP_CONTROL);
+		DBGLOG("azul", "panel power on, PP_STATUS %08X", orgReadRegister32(controller, PCH_PP_STATUS));
+	}
+	if (!(control & EDP_BLC_ENABLE)) {
+		orgWriteRegister32(controller, PCH_PP_CONTROL, control | EDP_BLC_ENABLE);
+		DBGLOG("azul", "backlight on, PP_CONTROL %08X", control | EDP_BLC_ENABLE);
+	}
+}
+
+static void backlightOff(void *controller) {
+	auto control = orgReadRegister32(controller, PCH_PP_CONTROL);
+	if (control != 0xFFFFFFFF && (control & EDP_BLC_ENABLE)) {
+		orgWriteRegister32(controller, PCH_PP_CONTROL, control & ~EDP_BLC_ENABLE);
+		DBGLOG("azul", "backlight off, PP_CONTROL %08X", control & ~EDP_BLC_ENABLE);
+	}
+}
+
+// Return values are passed through whole: only the panel framebuffer is touched
+static uint64_t wrapLightUpDP(void *controller, IOService *framebuffer, void *path, const void *timing) {
+	auto ret = FunctionCast(wrapLightUpDP, orgLightUpDP)(controller, framebuffer, path, timing);
+	if (isPanel(framebuffer))
+		panelOn(controller);
+	return ret;
+}
+
+static uint64_t wrapDisableDisplay(void *controller, IOService *framebuffer, void *path, bool arg) {
+	if (isPanel(framebuffer))
+		backlightOff(controller);
+	return FunctionCast(wrapDisableDisplay, orgDisableDisplay)(controller, framebuffer, path, arg);
+}
+
+static void processPanel(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
+	if (checkKernelArgument("-azulfixnopanel")) {
+		panelStatus = "off (-azulfixnopanel)";
+		return;
+	}
+
+	patcher.clearError();
+	orgReadRegister32 = reinterpret_cast<t_readRegister32>(patcher.solveSymbol(index, "__ZN24AppleIntelAzulController14ReadRegister32Em", address, size));
+	orgWriteRegister32 = reinterpret_cast<t_writeRegister32>(patcher.solveSymbol(index, "__ZN24AppleIntelAzulController15WriteRegister32Emj", address, size));
+	patcher.clearError();
+	if (!orgReadRegister32 || !orgWriteRegister32) {
+		panelStatus = "register accessors not found";
+		return;
+	}
+
+	KernelPatcher::RouteRequest requests[] {
+		{"__ZN24AppleIntelAzulController9LightUpDPEP21AppleIntelFramebufferP11DISPLAYPATHPK29IODetailedTimingInformationV2", wrapLightUpDP, orgLightUpDP},
+		{"__ZN24AppleIntelAzulController14DisableDisplayEP21AppleIntelFramebufferP11DISPLAYPATHb", wrapDisableDisplay, orgDisableDisplay},
+	};
+	if (patcher.routeMultiple(index, requests, arrsize(requests), address, size)) {
+		panelStatus = "backlight with LightUpDP and DisableDisplay";
+	} else {
+		panelStatus = "LightUpDP/DisableDisplay not routed";
+		SYSLOG("azul", "failed to route LightUpDP/DisableDisplay, error %d", static_cast<int>(patcher.getError()));
+	}
+	patcher.clearError();
 }
 
 static void processAzul(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
@@ -137,7 +244,9 @@ static void processAzul(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		patcher.clearError();
 	}
 
-	SYSLOG("azul", "getFeatureControl: %s, findMEDevice wait: %s", asrStatus, meStatus);
+	processPanel(patcher, index, address, size);
+
+	SYSLOG("azul", "getFeatureControl: %s, findMEDevice wait: %s, panel: %s", asrStatus, meStatus, panelStatus);
 	publishStatus();
 }
 

@@ -7,13 +7,14 @@ a ThinkPad W541 running [ouroBIOS](https://github.com/debianita22/ourobios) (cor
 the built-in panel is driven through a DisplayPort port instead of eDP and the ME (HECI) PCI device
 is hidden.
 
-The two fixes are applied in memory when the framebuffer loads. The kext on disk stays exactly as
+The fixes are applied in memory when the framebuffer loads. The kext on disk stays exactly as
 OCLP installs it, so nothing has to be patched again after a macOS update or an OCLP root patch.
 
 | Fix | Without AzulFix | With AzulFix |
 |-----|-----------------|--------------|
 | ASR | white flashes every ~1 s, no picture with acceleration | `FeatureControl` > `ASRDisable` = 1 |
 | ME wait | 40 s of boot spent waiting for the ME, slow wake with a green screen | wait of 1 ms instead of 10 s per device name |
+| Panel | black screen at S3 wake when the firmware leaves the display to the OS; backlight left on during display sleep | panel power sequence and backlight on after `LightUpDP`, backlight off before `DisableDisplay` |
 
 Tested build: `AppleIntelFramebufferAzul` 18.0.8 (OCLP, UUID `FA074475…`), macOS 14 Sonoma.
 
@@ -35,6 +36,15 @@ at boot and again for every framebuffer at wake. AzulFix changes the timeout imm
 (`48 be 00 e4 0b 54 02 00 00 00` → `48 be 40 42 0f 00 00 00 00 00`, unique in 18.0.8) to 1 ms.
 A device that is already registered is still found.
 
+**Panel backlight.** To Azul the panel on DDI D is a DP display, so it never drives the PCH panel
+power sequencer (`PP_CONTROL`), which coreboot uses for it (`GFX_GMA_PANEL_1_PORT "DP3"`). At S3
+resume with ouroBIOS "Light the display up at wake" off, the firmware gives the panel only VDD
+(`PP_CONTROL` 0x8): Azul trains the link and sends the picture, but the backlight stays off. On the
+framebuffer with `port-number` 7, AzulFix turns the power sequence on after `LightUpDP`, waits for it
+(power-up delay, at most 500 ms) and turns the backlight on, as libgfxinit and i915 do; before
+`DisableDisplay` it turns the backlight off. The panel keeps its power, so its HPD stays high for the
+next probe. Registers go through `AppleIntelAzulController::ReadRegister32`/`WriteRegister32`.
+
 ## Install
 
 1. Lilu 1.2.0 or newer (built against 1.7.2); works together with WhateverGreen.
@@ -52,18 +62,19 @@ A device that is already registered is still found.
 | `-azulfixoff` | disable AzulFix |
 | `-azulfixnoasr` | skip the ASR fix |
 | `-azulfixnome` | skip the ME wait patch |
+| `-azulfixnopanel` | skip the panel backlight handling |
 | `-azulfixdbg` | debug log (DEBUG build) |
 | `-azulfixbeta` | load on macOS versions newer than supported |
 
 ## Check
 
 ```sh
-ioreg -rc AzulFix -d1 -w0 | grep -E 'ASRDisable|MEWait|VersionInfo'
+ioreg -rc AzulFix -d1 -w0 | grep -E 'ASRDisable|MEWait|Panel|VersionInfo'
 ioreg -rc AppleIntelAzulController -d1 -w0 | grep -o '"ASRDisable"=[0-9]*'
 sudo dmesg | grep AzulFix
 ```
 
-Expected: `ASRDisable` = `set to 1`, `MEWait` = `10 s -> 1 ms`, and `"ASRDisable"=1` in the
+Expected: `ASRDisable` = `set to 1`, `MEWait` = `10 s -> 1 ms`, `Panel` = `backlight with LightUpDP and DisableDisplay`, and `"ASRDisable"=1` in the
 controller's `FeatureControl`. Lilu logs through `IOLog("%s", ...)`, which the unified log stores
 as `<private>`, so `log show` does not show the messages; the kernel message buffer (`dmesg`) does,
 while they are still in it.
