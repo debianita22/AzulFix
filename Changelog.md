@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.4
+- Wait up to 1 s for the panel power sequencer, as libgfxinit (power cycle delay included), and take the controller in `LightUpDP` and `DisableDisplay` too, for `-azulfixnoasr`
+
 #### v1.1.3
 - Turn the panel power sequence on when the panel framebuffer wakes (`doSetPowerState`), before Azul wakes the sink over AUX: powering it up just before `LightUpDP` left the picture black at S3 wake
 

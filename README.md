@@ -42,7 +42,7 @@ resume with ouroBIOS "Light the display up at wake" off, the firmware gives the 
 (`PP_CONTROL` 0x8): Azul trains the link and sends the picture, but the backlight stays off. On the
 framebuffer with `port-number` 7, AzulFix turns the power sequence on when the framebuffer wakes
 (`AppleIntelFramebuffer::doSetPowerState`), before Azul wakes the sink over AUX and trains the link,
-waits for it (power-up delay, at most 500 ms), and turns the backlight on after it, as libgfxinit
+waits for it (power-up delay, at most 1 s), and turns the backlight on after it, as libgfxinit
 and i915 do; before
 `DisableDisplay` it turns the backlight off and waits the backlight off delay (`PP_OFF_DELAYS`, 1 ms
 on the W541) before the video goes. The panel keeps its power, so its HPD stays high for the

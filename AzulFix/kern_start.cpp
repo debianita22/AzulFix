@@ -95,7 +95,8 @@ static t_writeRegister32 orgWriteRegister32 {};
 static mach_vm_address_t orgLightUpDP {};
 static mach_vm_address_t orgDisableDisplay {};
 static mach_vm_address_t orgDoSetPowerState {};
-// The controller, for the framebuffer hook: Azul has one, and calls getFeatureControl in its start
+// The controller, for the framebuffer hook: Azul has one. getFeatureControl, called in its start,
+// takes it; LightUpDP and DisableDisplay too, for -azulfixnoasr where getFeatureControl is not routed
 static void *panelController {};
 
 // Shown by `ioreg -rc AzulFix -d1`
@@ -153,8 +154,9 @@ static void panelPowerOn(void *controller) {
 	if (control == 0xFFFFFFFF || (control & PANEL_POWER_ON))
 		return;
 	orgWriteRegister32(controller, PCH_PP_CONTROL, control | PANEL_POWER_ON | PANEL_POWER_RESET);
-	// Power-up delay of the panel, 200 ms on the W541; give up after 500 ms
-	for (int i = 0; i < 50; i++) {
+	// Power-up delay of the panel, 200 ms on the W541, and the power cycle delay if the panel
+	// was powered down less than 500 ms before; give up after 1 s, as libgfxinit
+	for (int i = 0; i < 100; i++) {
 		if ((orgReadRegister32(controller, PCH_PP_STATUS) & (PP_ON | PP_SEQUENCE_MASK)) == PP_ON)
 			break;
 		IOSleep(10);
@@ -185,6 +187,7 @@ static void backlightOff(void *controller) {
 
 // Return values are passed through whole: only the panel framebuffer is touched
 static uint64_t wrapLightUpDP(void *controller, IOService *framebuffer, void *path, const void *timing) {
+	panelController = controller;
 	bool panel = isPanel(framebuffer);
 	if (panel)
 		panelPowerOn(controller);
@@ -195,6 +198,7 @@ static uint64_t wrapLightUpDP(void *controller, IOService *framebuffer, void *pa
 }
 
 static uint64_t wrapDisableDisplay(void *controller, IOService *framebuffer, void *path, bool arg) {
+	panelController = controller;
 	if (isPanel(framebuffer))
 		backlightOff(controller);
 	return FunctionCast(wrapDisableDisplay, orgDisableDisplay)(controller, framebuffer, path, arg);
