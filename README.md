@@ -60,11 +60,16 @@ A device that is already registered is still found.
 ```sh
 ioreg -rc AzulFix -d1 -w0 | grep -E 'ASRDisable|MEWait|VersionInfo'
 ioreg -rc AppleIntelAzulController -d1 -w0 | grep -o '"ASRDisable"=[0-9]*'
-/usr/bin/log show --last boot --predicate 'eventMessage CONTAINS "AzulFix"'
+sudo dmesg | grep AzulFix
 ```
 
 Expected: `ASRDisable` = `set to 1`, `MEWait` = `10 s -> 1 ms`, and `"ASRDisable"=1` in the
-controller's `FeatureControl`.
+controller's `FeatureControl`. Lilu logs through `IOLog("%s", ...)`, which the unified log stores
+as `<private>`, so `log show` does not show the messages; the kernel message buffer (`dmesg`) does,
+while they are still in it.
+
+Verified on the W541 (2026-10-26) with the original OCLP kext: `set to 1`, `10 s -> 1 ms`, the ME
+lookup at boot takes 108 ms instead of 40 s.
 
 ## Build
 
