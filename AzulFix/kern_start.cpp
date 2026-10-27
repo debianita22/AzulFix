@@ -22,7 +22,10 @@
 //       (PP_CONTROL), which coreboot uses for it (GFX_GMA_PANEL_1_PORT "DP3"): with the firmware
 //       leaving the display to the OS at S3 resume (VDD only, PP_CONTROL 0x8) the link trains and
 //       the picture is sent, but the backlight stays off. On the panel framebuffer (port-number 7,
-//       DDI D), the panel power sequence is turned on when the framebuffer wakes
+//       DDI D, with a desktop framebuffer; port-number 0 and an LVDS connector with a laptop one
+//       whose built-in connector is moved to DDI D, as ouroBIOS "Panel under macOS: Built-in
+//       display" expects: Azul does not run the sequencer there either, as Haswell has no LVDS
+//       and the panel is not on DDI A), the panel power sequence is turned on when the framebuffer wakes
 //       (doSetPowerState), before Azul wakes the sink over AUX and trains the link: powering the
 //       panel up later resets it (striped or black picture at wake). The backlight goes on after
 //       LightUpDP, as libgfxinit and i915 do; before DisableDisplay the backlight is turned off,
@@ -41,6 +44,7 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
+#include <libkern/c++/OSData.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 
@@ -88,8 +92,11 @@ static const uint8_t efFastRepl[] {0x31, 0xDB, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x0
 static mach_vm_address_t orgGetFeatureControl {};
 static bool asrInjected {false};
 
-// Panel: port-number of DDI D, and the PCH panel power sequencer (i915_reg.h)
+// Panel: port-number of DDI D, the port-number and connector-type of a built-in LVDS connector,
+// and the PCH panel power sequencer (i915_reg.h)
 static constexpr uint32_t PanelPort {7};
+static constexpr uint32_t BuiltInPort {0};
+static constexpr uint32_t ConnectorLVDS {0x2};
 static constexpr unsigned long PCH_PP_STATUS {0xC7200};
 static constexpr unsigned long PCH_PP_CONTROL {0xC7204};
 static constexpr unsigned long PCH_PP_OFF_DELAYS {0xC720C};
@@ -157,7 +164,17 @@ static void wrapGetFeatureControl(IOService *controller) {
 
 static bool isPanel(IOService *framebuffer) {
 	auto port = framebuffer ? OSDynamicCast(OSNumber, framebuffer->getProperty("port-number")) : nullptr;
-	return port && port->unsigned32BitValue() == PanelPort;
+	if (!port)
+		return false;
+	auto number = port->unsigned32BitValue();
+	if (number == PanelPort)
+		return true;
+	// Built-in connector of a laptop framebuffer (con0 LVDS, busId 6 on DDI D): port-number 0
+	if (number != BuiltInPort)
+		return false;
+	auto type = OSDynamicCast(OSData, framebuffer->getProperty("connector-type"));
+	return type && type->getLength() == sizeof(uint32_t) &&
+		*static_cast<const uint32_t *>(type->getBytesNoCopy()) == ConnectorLVDS;
 }
 
 // Panel.On (libgfxinit): before Azul talks to the panel at all, as the panel loses its state when

@@ -1,5 +1,8 @@
 AzulFix Changelog
 =================
+#### v1.1.7
+- Panel power sequence and backlight also on the built-in connector of a laptop framebuffer moved to DDI D (port-number 0, LVDS connector), as with ouroBIOS "Panel under macOS: Built-in display": the panel stayed black at S3 wake
+
 #### v1.1.6
 - Normal framing by default (`-azulfixef` keeps enhanced framing): with it the picture always came back clean after display sleep, 10 times out of 10
 
